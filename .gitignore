@@ -1,0 +1,28 @@
+# Node
+node_modules/
+dist/
+build/
+.npm/
+
+# Env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Prisma
+backend/prisma/dev.db
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

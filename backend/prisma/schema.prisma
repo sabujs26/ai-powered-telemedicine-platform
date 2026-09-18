@@ -1,0 +1,177 @@
+// Prisma schema for the AI-Assisted Secure Telemedicine System
+// Mirrors Section 11 (Database / ER Requirements) of the requirements baseline,
+// with the v1.1 decisions applied (Section 18):
+//  - Doctor.approvalStatus supports Admin-only account activation
+//  - Doctor.consultationFee (doctor sets own fee)
+//  - SymptomAssessment.emergencyFlag (red-flag symptom check)
+//  - FileAttachment intentionally OMITTED (FR-18 deferred out of MVP)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DISABLED
+}
+
+enum AppointmentStatus {
+  PENDING_PAYMENT
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum ConsultationStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+}
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  firebaseUid String   @unique
+  role        Role
+  createdAt   DateTime @default(now())
+
+  patient Patient?
+  doctor  Doctor?
+}
+
+model Patient {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+  name        String
+  dob         DateTime?
+  contactInfo String?
+
+  appointments       Appointment[]
+  symptomAssessments SymptomAssessment[]
+}
+
+model Doctor {
+  id               String         @id @default(uuid())
+  userId           String         @unique
+  user             User           @relation(fields: [userId], references: [id])
+  name             String
+  specializationId String
+  specialization   Specialization @relation(fields: [specializationId], references: [id])
+  approvalStatus   ApprovalStatus @default(PENDING) // Admin-only creation (decision #2): starts PENDING, Admin sets APPROVED
+  consultationFee  Decimal?       @db.Decimal(10, 2) // decision #9: doctor sets own fee
+
+  availability  DoctorAvailability[]
+  appointments  Appointment[]
+  prescriptions Prescription[]
+}
+
+model Specialization {
+  id          String  @id @default(uuid())
+  name        String  @unique
+  description String?
+
+  doctors            Doctor[]
+  symptomAssessments SymptomAssessment[]
+}
+
+model DoctorAvailability {
+  id        String   @id @default(uuid())
+  doctorId  String
+  doctor    Doctor   @relation(fields: [doctorId], references: [id])
+  startTime DateTime
+  endTime   DateTime
+  isBooked  Boolean  @default(false)
+
+  appointment Appointment?
+}
+
+model Appointment {
+  id        String             @id @default(uuid())
+  patientId String
+  patient   Patient            @relation(fields: [patientId], references: [id])
+  doctorId  String
+  doctor    Doctor             @relation(fields: [doctorId], references: [id])
+  slotId    String             @unique
+  slot      DoctorAvailability @relation(fields: [slotId], references: [id])
+  status    AppointmentStatus  @default(PENDING_PAYMENT)
+  createdAt DateTime           @default(now())
+
+  payment      Payment?
+  consultation Consultation?
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  appointmentId String        @unique
+  appointment   Appointment   @relation(fields: [appointmentId], references: [id])
+  stripeRef     String?
+  amount        Decimal       @db.Decimal(10, 2)
+  status        PaymentStatus @default(PENDING)
+  createdAt     DateTime      @default(now())
+}
+
+model Consultation {
+  id            String             @id @default(uuid())
+  appointmentId String             @unique
+  appointment   Appointment        @relation(fields: [appointmentId], references: [id])
+  startedAt     DateTime?
+  endedAt       DateTime?
+  status        ConsultationStatus @default(SCHEDULED)
+
+  chatMessages ChatMessage[]
+  prescription Prescription?
+}
+
+model Prescription {
+  id             String       @id @default(uuid())
+  consultationId String       @unique
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
+  doctorId       String
+  doctor         Doctor       @relation(fields: [doctorId], references: [id])
+  content        String
+  issuedAt       DateTime     @default(now())
+}
+
+model ChatMessage {
+  id             String       @id @default(uuid())
+  consultationId String
+  consultation   Consultation @relation(fields: [consultationId], references: [id])
+  senderId       String
+  content        String
+  sentAt         DateTime     @default(now())
+}
+
+model SymptomAssessment {
+  id                      String          @id @default(uuid())
+  patientId               String
+  patient                 Patient         @relation(fields: [patientId], references: [id])
+  symptomsData            Json
+  predictedCondition      String?
+  confidence              Float?
+  recommendedSpecialistId String?
+  recommendedSpecialist   Specialization? @relation(fields: [recommendedSpecialistId], references: [id])
+  emergencyFlag           Boolean         @default(false) // decision #3: red-flag symptom check
+  createdAt               DateTime        @default(now())
+}
