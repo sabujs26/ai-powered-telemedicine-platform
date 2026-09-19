@@ -26,3 +26,7 @@ backend/prisma/dev.db
 # Logs
 *.log
 npm-debug.log*
+
+# Firebase private credentials
+serviceAccountKey.json
+firebase-adminsdk*.json
