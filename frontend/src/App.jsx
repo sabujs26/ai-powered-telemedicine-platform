@@ -1,6 +1,8 @@
 import { Routes, Route } from "react-router-dom";
 import { BookingProvider } from "./lib/BookingContext.jsx";
+import ProtectedRoute from "./lib/ProtectedRoute.jsx";
 import Login from "./pages/Login.jsx";
+import Register from "./pages/Register.jsx";
 import PatientDashboard from "./pages/PatientDashboard.jsx";
 import SymptomAssessment from "./pages/SymptomAssessment.jsx";
 import DoctorSearch from "./pages/DoctorSearch.jsx";
@@ -10,24 +12,79 @@ import Appointments from "./pages/Appointments.jsx";
 import DoctorDashboard from "./pages/DoctorDashboard.jsx";
 import AdminDashboard from "./pages/AdminDashboard.jsx";
 
-// NOTE: routes are not yet role-guarded (that's part of Phase 3 — Auth & RBAC
-// in the roadmap). Right now every route is reachable directly for demo purposes.
 export default function App() {
   return (
     <BookingProvider>
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
 
-        <Route path="/patient" element={<PatientDashboard />} />
-        <Route path="/patient/symptoms" element={<SymptomAssessment />} />
-        <Route path="/patient/doctors" element={<DoctorSearch />} />
-        <Route path="/patient/doctors/:id" element={<DoctorProfile />} />
-        <Route path="/patient/book" element={<BookingConfirm />} />
-        <Route path="/patient/appointments" element={<Appointments />} />
+        <Route
+          path="/patient"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <PatientDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/symptoms"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <SymptomAssessment />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/doctors"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <DoctorSearch />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/doctors/:id"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <DoctorProfile />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/book"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <BookingConfirm />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/patient/appointments"
+          element={
+            <ProtectedRoute allowedRoles={["PATIENT"]}>
+              <Appointments />
+            </ProtectedRoute>
+          }
+        />
 
-        <Route path="/doctor" element={<DoctorDashboard />} />
-        <Route path="/admin" element={<AdminDashboard />} />
+        <Route
+          path="/doctor"
+          element={
+            <ProtectedRoute allowedRoles={["DOCTOR"]}>
+              <DoctorDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute allowedRoles={["ADMIN"]}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </BookingProvider>
   );

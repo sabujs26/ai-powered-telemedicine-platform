@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
 
 import healthRoutes from "./routes/health.js";
 import authRoutes from "./routes/auth.js";
@@ -32,6 +33,7 @@ const sensitiveLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 // picks up every other route.
 app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
+app.use(cookieParser()); // reads the httpOnly refresh-token cookie (auth routes)
 
 app.use("/api/health", healthRoutes);
 app.use("/api/auth", sensitiveLimiter, authRoutes);

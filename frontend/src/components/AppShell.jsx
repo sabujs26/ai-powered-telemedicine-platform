@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
+import { useAuth } from "../lib/AuthContext.jsx";
 
 const navItems = [
   { to: "/patient", label: "Dashboard", icon: HomeIcon },
@@ -8,6 +9,10 @@ const navItems = [
 ];
 
 export default function AppShell({ children }) {
+
+  const { logout, user } = useAuth();
+  const navigate = useNavigate();
+  
   return (
     <div className="min-h-screen flex">
       <aside className="w-60 shrink-0 border-r border-line bg-white flex flex-col">
@@ -33,8 +38,18 @@ export default function AppShell({ children }) {
           ))}
         </nav>
         <div className="px-6 py-4 border-t border-line">
-          <p className="text-xs text-muted">Signed in as</p>
-          <p className="text-sm text-ink">demo.patient@telemed.app</p>
+           <p className="text-xs text-muted">Signed in as</p>
+           <p className="text-sm text-ink">{user?.email}</p>
+
+            <button
+              onClick={async () => {
+              await logout();
+              navigate("/login");
+              }}
+              className="mt-3 text-sm text-muted hover:text-ink transition-colors"
+            >
+             Logout
+           </button>
         </div>
       </aside>
       <main className="flex-1 px-10 py-8 max-w-4xl">{children}</main>

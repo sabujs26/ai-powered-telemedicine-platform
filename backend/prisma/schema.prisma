@@ -5,6 +5,10 @@
 //  - Doctor.consultationFee (doctor sets own fee)
 //  - SymptomAssessment.emergencyFlag (red-flag symptom check)
 //  - FileAttachment intentionally OMITTED (FR-18 deferred out of MVP)
+//
+// AUTH UPDATE: Firebase Authentication has been replaced with local
+// email+password auth (bcrypt hashing + JWT access/refresh tokens).
+// User.firebaseUid was removed; User.password and RefreshToken were added.
 
 generator client {
   provider = "prisma-client-js"
@@ -50,14 +54,29 @@ enum ConsultationStatus {
 }
 
 model User {
-  id          String   @id @default(uuid())
-  email       String   @unique
-  firebaseUid String   @unique
-  role        Role
-  createdAt   DateTime @default(now())
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String // bcrypt hash — never store or return plain text
+  role      Role
+  createdAt DateTime @default(now())
 
-  patient Patient?
-  doctor  Doctor?
+  refreshTokens RefreshToken[]
+  patient       Patient?
+  doctor        Doctor?
+}
+
+// Supports refresh-token rotation/revocation (Section 8 of the auth spec):
+// each issued refresh token is stored hashed, so a stolen DB dump doesn't
+// hand out usable tokens, and any single token can be revoked without
+// affecting the user's other sessions/devices.
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String   @unique
+  revoked   Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 }
 
 model Patient {

@@ -1,6 +1,8 @@
 import { Router } from "express";
+import crypto from "crypto";
 import prisma from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { hashPassword } from "../lib/authTokens.js";
 
 const router = Router();
 
@@ -48,19 +50,33 @@ router.post("/:id/availability", requireAuth, requireRole("DOCTOR"), async (req,
   res.status(201).json(slot);
 });
 
-// POST /api/doctors — Admin-only Doctor account creation (decision #2, Section 18).
-// In practice this runs AFTER the Doctor's Firebase Auth account is created
-// (e.g. by an Admin invite flow) — this endpoint links that Firebase user to
-// a new Doctor profile in our database.
+/**
+ * POST /api/doctors — Admin-only Doctor account creation (decision #2, Section 18).
+ * Since there is no self-registration path for doctors, Admin creates the
+ * account directly here. A temporary password is generated (or optionally
+ * supplied by the Admin) and returned ONCE in the response — it is never
+ * stored or retrievable again — for the Admin to relay to the doctor, who
+ * should change it on first login.
+ */
 router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
-  const { firebaseUid, email, name, specializationId, consultationFee } = req.body;
-  if (!firebaseUid || !email || !name || !specializationId) {
-    return res.status(400).json({ error: "firebaseUid, email, name, specializationId are required" });
+  const { email, name, specializationId, consultationFee, temporaryPassword } = req.body;
+  if (!email || !name || !specializationId) {
+    return res.status(400).json({ error: "email, name, specializationId are required" });
   }
+
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    return res.status(409).json({ error: "An account with this email already exists" });
+  }
+
+  // Generate a random temporary password if the Admin didn't supply one.
+  const plainPassword = temporaryPassword || crypto.randomBytes(9).toString("base64url");
+  const passwordHash = await hashPassword(plainPassword);
+
   const user = await prisma.user.create({
     data: {
       email,
-      firebaseUid,
+      password: passwordHash,
       role: "DOCTOR",
       doctor: {
         create: { name, specializationId, consultationFee, approvalStatus: "APPROVED" },
@@ -68,7 +84,14 @@ router.post("/", requireAuth, requireRole("ADMIN"), async (req, res) => {
     },
     include: { doctor: true },
   });
-  res.status(201).json(user);
+
+  res.status(201).json({
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    doctor: user.doctor,
+    temporaryPassword: plainPassword, // shown once — relay to the doctor out-of-band, then have them change it
+  });
 });
 
 // PATCH /api/doctors/:id/approve — FR-22: Admin approves/rejects/disables a doctor.
