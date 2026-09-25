@@ -74,6 +74,12 @@ export default function Login() {
             Create an account
           </Link>
         </p>
+        <p className="text-center text-xs text-muted mt-2">
+          Are you a doctor?{" "}
+          <Link to="/register-doctor" className="text-teal hover:underline">
+            Apply here
+          </Link>
+        </p>
       </div>
     </div>
   );

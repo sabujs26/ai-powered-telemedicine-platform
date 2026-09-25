@@ -81,6 +81,95 @@ router.post("/register", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/auth/register-doctor
+ * Doctor self-registration → PENDING approval (MVP decision, supersedes the
+ * earlier "Admin creates Doctor directly" approach — see schema.prisma
+ * header comment). Role and approvalStatus are ALWAYS set by the backend;
+ * neither is ever read from the request body.
+ *
+ * Deliberately does NOT issue an access/refresh token pair — an unapproved
+ * doctor gets no session at all. This keeps "who can reach protected
+ * doctor functionality" a single, simple rule enforced at /login (Step 4),
+ * rather than juggling a partially-authenticated state.
+ */
+router.post("/register-doctor", async (req, res) => {
+  try {
+    const {
+      email,
+      password,
+      name,
+      contactInfo,
+      qualification,
+      registrationNumber,
+      specializationId,
+      consultationFee,
+    } = req.body;
+
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: "email, password, and name are required" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+    if (!specializationId) {
+      return res.status(400).json({ error: "specializationId is required" });
+    }
+    if (!qualification || !registrationNumber) {
+      return res
+        .status(400)
+        .json({ error: "qualification and registrationNumber are required for a doctor application" });
+    }
+    if (consultationFee !== undefined && consultationFee !== null) {
+      const fee = Number(consultationFee);
+      if (!Number.isFinite(fee) || fee < 0 || fee > 100000) {
+        return res.status(400).json({ error: "consultationFee must be a reasonable non-negative amount" });
+      }
+    }
+
+    const specialization = await prisma.specialization.findUnique({ where: { id: specializationId } });
+    if (!specialization) {
+      return res.status(400).json({ error: "Unknown specializationId" });
+    }
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return res.status(409).json({ error: "An account with this email already exists" });
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: passwordHash,
+        role: "DOCTOR", // backend-forced — never trust a client-sent role
+        doctor: {
+          create: {
+            name,
+            contactInfo,
+            qualification,
+            registrationNumber,
+            specializationId,
+            consultationFee,
+            approvalStatus: "PENDING", // backend-forced — never auto-approved
+          },
+        },
+      },
+      include: { doctor: true },
+    });
+
+    // No token pair issued. Never return the password hash.
+    res.status(201).json({
+      message: "Your doctor application has been submitted and is awaiting admin approval.",
+      user: { id: user.id, email: user.email, role: user.role },
+      doctor: { id: user.doctor.id, approvalStatus: user.doctor.approvalStatus },
+    });
+  } catch (err) {
+    res.status(400).json({ error: "Doctor registration failed", detail: err.message });
+  }
+});
+
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
@@ -89,11 +178,26 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "email and password are required" });
     }
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email }, include: { doctor: true } });
     // Deliberately identical error for "no such user" and "wrong password" —
     // avoids leaking which emails are registered.
     if (!user || !(await verifyPassword(password, user.password))) {
       return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    // Doctor approval gate — patients and admins are unaffected (no `doctor`
+    // relation on their User row, so this block is simply skipped for them).
+    if (user.role === "DOCTOR") {
+      if (user.doctor.approvalStatus === "PENDING") {
+        return res.status(403).json({ error: "Your doctor application is still pending approval." });
+      }
+      if (user.doctor.approvalStatus === "REJECTED") {
+        return res.status(403).json({ error: "Your doctor application has been rejected." });
+      }
+      if (user.doctor.approvalStatus === "DISABLED") {
+        return res.status(403).json({ error: "Your doctor account has been disabled. Contact an admin." });
+      }
+      // Only "APPROVED" falls through to a normal session below.
     }
 
     const accessToken = await issueTokenPair(user, res);

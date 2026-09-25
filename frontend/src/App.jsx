@@ -3,6 +3,7 @@ import { BookingProvider } from "./lib/BookingContext.jsx";
 import ProtectedRoute from "./lib/ProtectedRoute.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
+import RegisterDoctor from "./pages/RegisterDoctor.jsx";
 import PatientDashboard from "./pages/PatientDashboard.jsx";
 import SymptomAssessment from "./pages/SymptomAssessment.jsx";
 import DoctorSearch from "./pages/DoctorSearch.jsx";
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/register-doctor" element={<RegisterDoctor />} />
 
         <Route
           path="/patient"

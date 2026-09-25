@@ -9,6 +9,14 @@
 // AUTH UPDATE: Firebase Authentication has been replaced with local
 // email+password auth (bcrypt hashing + JWT access/refresh tokens).
 // User.firebaseUid was removed; User.password and RefreshToken were added.
+//
+// DOCTOR ONBOARDING UPDATE: superseding the earlier "Admin creates Doctor
+// directly" decision — Doctors now self-register (role=DOCTOR,
+// approvalStatus=PENDING) via POST /api/auth/register-doctor, and an Admin
+// approves/rejects via /api/admin/doctors/*. Doctor gained qualification,
+// registrationNumber, contactInfo (basic MVP application info — no external
+// credential verification). The old Admin-direct-create endpoint
+// (POST /api/doctors) still exists unchanged as an alternate path.
 
 generator client {
   provider = "prisma-client-js"
@@ -92,14 +100,17 @@ model Patient {
 }
 
 model Doctor {
-  id               String         @id @default(uuid())
-  userId           String         @unique
-  user             User           @relation(fields: [userId], references: [id])
-  name             String
-  specializationId String
-  specialization   Specialization @relation(fields: [specializationId], references: [id])
-  approvalStatus   ApprovalStatus @default(PENDING) // Admin-only creation (decision #2): starts PENDING, Admin sets APPROVED
-  consultationFee  Decimal?       @db.Decimal(10, 2) // decision #9: doctor sets own fee
+  id                 String         @id @default(uuid())
+  userId             String         @unique
+  user               User           @relation(fields: [userId], references: [id])
+  name               String
+  specializationId   String
+  specialization     Specialization @relation(fields: [specializationId], references: [id])
+  approvalStatus     ApprovalStatus @default(PENDING) // set PENDING on self-registration; Admin moves to APPROVED/REJECTED
+  consultationFee    Decimal?       @db.Decimal(10, 2) // decision #9: doctor sets own fee
+  qualification      String? // e.g. "MBBS, FCPS (Medicine)" — MVP: free text, no credential verification
+  registrationNumber String? // BM&DC registration number (or equivalent) — MVP: free text, not verified against any registry
+  contactInfo        String?
 
   availability  DoctorAvailability[]
   appointments  Appointment[]

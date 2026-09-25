@@ -6,6 +6,17 @@ import { hashPassword } from "../lib/authTokens.js";
 
 const router = Router();
 
+// GET /api/doctors/me — the logged-in doctor's own profile (specialization,
+// fee, application info). Needed for the Doctor Dashboard (Step 8).
+router.get("/me", requireAuth, requireRole("DOCTOR"), async (req, res) => {
+  const doctor = await prisma.doctor.findUnique({
+    where: { userId: req.user.id },
+    include: { specialization: true },
+  });
+  if (!doctor) return res.status(404).json({ error: "Doctor profile not found" });
+  res.json(doctor);
+});
+
 // GET /api/doctors — FR-09: search/list doctors, optionally filtered by specialization.
 router.get("/", requireAuth, async (req, res) => {
   const { specializationId } = req.query;
