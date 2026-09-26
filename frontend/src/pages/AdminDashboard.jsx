@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../lib/api.js";
 import { useAuth } from "../lib/AuthContext.jsx";
+import { formatCurrency } from "../lib/currency.js";
 
 // FR-22: Admin reviews pending doctor applications and approves/rejects them.
 // Real backend calls — GET/PATCH /api/admin/doctors/* (admin.js, requireRole("ADMIN")).
@@ -139,11 +140,7 @@ export default function AdminDashboard() {
                   <Row label="Contact information" value={doc.contactInfo || "—"} />
                   <Row
                     label="Consultation fee"
-                    value={
-                      doc.consultationFee === null || doc.consultationFee === undefined
-                        ? "Not set"
-                        : `৳${Number(doc.consultationFee).toLocaleString()}`
-                    }
+                    value={formatCurrency(doc.consultationFee) || "Not set"}
                   />
                 </dl>
 

@@ -17,6 +17,40 @@
 // registrationNumber, contactInfo (basic MVP application info — no external
 // credential verification). The old Admin-direct-create endpoint
 // (POST /api/doctors) still exists unchanged as an alternate path.
+//
+// AVAILABILITY + SCHEDULING UPDATE: DoctorAvailability was redesigned from a
+// one-off "single bookable slot with isBooked flag" model into a RECURRING
+// WEEKLY TEMPLATE (dayOfWeek + startTime/endTime as time-of-day + active
+// flag). Individual bookable slots are no longer rows in the database — they
+// are generated dynamically per real calendar date from this weekly template
+// (see backend/src/lib/scheduling.js). Appointment.slotId/slot was removed
+// accordingly and replaced with Appointment.scheduledAt (the actual real
+// UTC instant) + Appointment.durationMinutes (a snapshot of the slot length
+// at booking time). A composite unique index on (doctorId, scheduledAt)
+// enforces double-booking prevention at the database level.
+//
+// TIME REPRESENTATION: DoctorAvailability.startTime/endTime are stored as
+// "HH:mm" 24-hour strings (e.g. "09:00", "13:00"), not DateTime — they
+// represent a repeating time-of-day, not a specific instant, so a DateTime
+// column would be misleading (it would imply a specific date). String
+// zero-padded 24h format also sorts/compares correctly lexicographically,
+// which simplifies overlap validation. dayOfWeek is an Int 0–6 following
+// JavaScript's `Date.getUTCDay()` convention (0=Sunday .. 6=Saturday), which
+// is exactly what the backend's date-to-day-of-week calculation produces —
+// keeping both sides of that comparison in the same convention avoids a
+// common source of off-by-one bugs.
+//
+// TIMEZONE: this application is for Bangladesh (Asia/Dhaka, UTC+6, no DST
+// — a fixed offset year-round). Appointment.scheduledAt is stored as a
+// genuine UTC instant (Prisma/Postgres native DateTime), which is the
+// correct way to store "a real moment in time." All Dhaka-wall-clock
+// interpretation (which weekday a given calendar date falls on, converting
+// a doctor's "09:00" availability into the correct UTC instant for a
+// specific date, and determining "today" in Dhaka) happens explicitly in
+// backend/src/lib/scheduling.js using a fixed +6:00 offset — deliberately
+// not pulling in a timezone library (e.g. date-fns-tz/luxon) for this,
+// since Bangladesh's fixed, DST-free offset makes that unnecessary
+// complexity for this MVP.
 
 generator client {
   provider = "prisma-client-js"
@@ -130,26 +164,31 @@ model DoctorAvailability {
   id        String   @id @default(uuid())
   doctorId  String
   doctor    Doctor   @relation(fields: [doctorId], references: [id])
-  startTime DateTime
-  endTime   DateTime
-  isBooked  Boolean  @default(false)
+  dayOfWeek Int // 0=Sunday .. 6=Saturday (JS Date.getUTCDay() convention — see header comment)
+  startTime String // "HH:mm" 24-hour, e.g. "09:00" — time-of-day, not a specific date
+  endTime   String // "HH:mm" 24-hour, e.g. "13:00"
+  active    Boolean  @default(true) // enable/disable without deleting (Step 2: "Enable/disable an availability period")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  appointment Appointment?
+  @@unique([doctorId, dayOfWeek, startTime, endTime])
 }
 
 model Appointment {
-  id        String             @id @default(uuid())
-  patientId String
-  patient   Patient            @relation(fields: [patientId], references: [id])
-  doctorId  String
-  doctor    Doctor             @relation(fields: [doctorId], references: [id])
-  slotId    String             @unique
-  slot      DoctorAvailability @relation(fields: [slotId], references: [id])
-  status    AppointmentStatus  @default(PENDING_PAYMENT)
-  createdAt DateTime           @default(now())
+  id              String            @id @default(uuid())
+  patientId       String
+  patient         Patient           @relation(fields: [patientId], references: [id])
+  doctorId        String
+  doctor          Doctor            @relation(fields: [doctorId], references: [id])
+  scheduledAt     DateTime // the real UTC instant of the appointment (see header comment on timezone strategy)
+  durationMinutes Int               @default(30) // snapshot of slot length at booking time
+  status          AppointmentStatus @default(PENDING_PAYMENT)
+  createdAt       DateTime          @default(now())
 
   payment      Payment?
   consultation Consultation?
+
+  @@unique([doctorId, scheduledAt]) // DB-level double-booking prevention (Step 9)
 }
 
 model Payment {
