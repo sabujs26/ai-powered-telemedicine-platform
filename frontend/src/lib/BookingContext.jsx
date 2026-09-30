@@ -10,10 +10,20 @@ export function BookingProvider({ children }) {
   const [assessment, setAssessment] = useState(null); // AI result
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [selectedSlot, setSelectedSlot] = useState(null);
+  const [selectedMode, setSelectedMode] = useState(null); // "ONLINE" | "PHYSICAL" (Step 4/9)
 
   return (
     <BookingContext.Provider
-      value={{ assessment, setAssessment, selectedDoctor, setSelectedDoctor, selectedSlot, setSelectedSlot }}
+      value={{
+        assessment,
+        setAssessment,
+        selectedDoctor,
+        setSelectedDoctor,
+        selectedSlot,
+        setSelectedSlot,
+        selectedMode,
+        setSelectedMode,
+      }}
     >
       {children}
     </BookingContext.Provider>

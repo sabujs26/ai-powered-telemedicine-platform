@@ -27,10 +27,102 @@ const router = Router();
 router.get("/me", requireAuth, requireRole("DOCTOR"), async (req, res) => {
   const doctor = await prisma.doctor.findUnique({
     where: { userId: req.user.id },
-    include: { specialization: true },
+    include: { specialization: true, clinic: true },
   });
   if (!doctor) return res.status(404).json({ error: "Doctor profile not found" });
   res.json(doctor);
+});
+
+const EDITABLE_DOCTOR_FIELDS = ["consultationFee", "contactInfo", "experience", "bio", "languages", "consultationModes"];
+const PROTECTED_DOCTOR_FIELDS = ["qualification", "registrationNumber", "specializationId", "specialization"];
+const VALID_CONSULTATION_MODES = ["ONLINE", "PHYSICAL", "BOTH"];
+
+/**
+ * PATCH /api/doctors/me — Step 5: doctor edits their OWN normal profile
+ * fields (bio, experience, fee, contact info, languages, consultation
+ * modes, clinic). Protected professional credentials (qualification,
+ * registrationNumber, specializationId) are explicitly rejected here with a
+ * clear error, rather than silently ignored — a doctor cannot change these
+ * by any request shape. A future "submit a credential change for admin
+ * review" workflow can be added later without touching this endpoint's
+ * editable-field logic.
+ */
+router.patch("/me", requireAuth, requireRole("DOCTOR"), async (req, res) => {
+  const doctor = await prisma.doctor.findUnique({ where: { userId: req.user.id }, include: { clinic: true } });
+  if (!doctor) return res.status(404).json({ error: "Doctor profile not found" });
+
+  const attemptedProtectedFields = PROTECTED_DOCTOR_FIELDS.filter((f) => req.body[f] !== undefined);
+  if (attemptedProtectedFields.length > 0) {
+    return res.status(400).json({
+      error: `These fields are protected professional credentials and cannot be self-edited: ${attemptedProtectedFields.join(", ")}`,
+    });
+  }
+
+  const data = {};
+
+  if (req.body.consultationFee !== undefined) {
+    const fee = Number(req.body.consultationFee);
+    if (!Number.isFinite(fee) || fee < 0 || fee > 100000) {
+      return res.status(400).json({ error: "consultationFee must be a reasonable non-negative amount" });
+    }
+    data.consultationFee = fee;
+  }
+  if (req.body.contactInfo !== undefined) data.contactInfo = String(req.body.contactInfo);
+  if (req.body.bio !== undefined) data.bio = String(req.body.bio);
+  if (req.body.languages !== undefined) data.languages = String(req.body.languages);
+  if (req.body.experience !== undefined) {
+    const exp = Number(req.body.experience);
+    if (!Number.isInteger(exp) || exp < 0 || exp > 70) {
+      return res.status(400).json({ error: "experience must be a whole number of years (0-70)" });
+    }
+    data.experience = exp;
+  }
+
+  let finalConsultationModes = doctor.consultationModes;
+  if (req.body.consultationModes !== undefined) {
+    if (!VALID_CONSULTATION_MODES.includes(req.body.consultationModes)) {
+      return res.status(400).json({ error: `consultationModes must be one of ${VALID_CONSULTATION_MODES.join(", ")}` });
+    }
+    data.consultationModes = req.body.consultationModes;
+    finalConsultationModes = req.body.consultationModes;
+  }
+
+  // Clinic (Step 3): part of the same profile update. `clinic: null` removes
+  // it (e.g. switching to ONLINE-only); an object upserts it.
+  let clinicResult = doctor.clinic;
+  if (req.body.clinic !== undefined) {
+    if (req.body.clinic === null) {
+      if (doctor.clinic) {
+        await prisma.clinic.delete({ where: { doctorId: doctor.id } });
+      }
+      clinicResult = null;
+    } else {
+      const { name, area, address, city, contactInfo } = req.body.clinic;
+      if (!name || typeof name !== "string") {
+        return res.status(400).json({ error: "clinic.name is required when providing clinic information" });
+      }
+      clinicResult = await prisma.clinic.upsert({
+        where: { doctorId: doctor.id },
+        create: { doctorId: doctor.id, name, area, address, city, contactInfo },
+        update: { name, area, address, city, contactInfo },
+      });
+    }
+  }
+
+  // A doctor offering PHYSICAL or BOTH needs clinic information for patients
+  // to know where to go — validated here rather than at booking time.
+  if ((finalConsultationModes === "PHYSICAL" || finalConsultationModes === "BOTH") && !clinicResult) {
+    return res.status(400).json({
+      error: "Clinic information is required to offer physical consultations",
+    });
+  }
+
+  const updated = await prisma.doctor.update({
+    where: { id: doctor.id },
+    data,
+    include: { specialization: true, clinic: true },
+  });
+  res.json(updated);
 });
 
 /**
@@ -145,17 +237,80 @@ router.delete("/me/availability/:id", requireAuth, requireRole("DOCTOR"), async 
   res.status(204).send();
 });
 
-// GET /api/doctors — FR-09: search/list doctors, optionally filtered by specialization.
-// Only APPROVED doctors are ever returned (Step 10) — PENDING/REJECTED/DISABLED never appear here.
+/**
+ * GET /api/doctors — Step 6/7: patient doctor discovery/search. Only
+ * APPROVED doctors are ever returned — PENDING/REJECTED/DISABLED never
+ * appear here, regardless of any filter combination.
+ *
+ * Filters (all optional, combinable): specializationId, area (clinic area,
+ * partial match), qualification (partial match), minFee/maxFee,
+ * minExperience, consultationMode (ONLINE|PHYSICAL — matches a doctor whose
+ * consultationModes is that value OR "BOTH"), and date (YYYY-MM-DD) — the
+ * availability filter, which reuses the EXISTING real slot-generation logic
+ * (scheduling.js) rather than a second/fake availability check: a doctor is
+ * only kept when they have at least one real, currently-bookable slot on
+ * that exact date.
+ */
 router.get("/", requireAuth, async (req, res) => {
-  const { specializationId } = req.query;
-  const doctors = await prisma.doctor.findMany({
-    where: {
-      approvalStatus: "APPROVED",
-      ...(specializationId ? { specializationId } : {}),
-    },
-    include: { specialization: true },
+  const { specializationId, area, qualification, minFee, maxFee, minExperience, consultationMode, date } = req.query;
+
+  const where = {
+    approvalStatus: "APPROVED",
+    ...(specializationId ? { specializationId } : {}),
+    ...(qualification ? { qualification: { contains: qualification, mode: "insensitive" } } : {}),
+    ...(area ? { clinic: { area: { contains: area, mode: "insensitive" } } } : {}),
+    ...(minExperience ? { experience: { gte: Number(minExperience) } } : {}),
+  };
+
+  if (minFee || maxFee) {
+    where.consultationFee = {};
+    if (minFee) where.consultationFee.gte = Number(minFee);
+    if (maxFee) where.consultationFee.lte = Number(maxFee);
+  }
+
+  if (consultationMode) {
+    if (!VALID_CONSULTATION_MODES.includes(consultationMode) || consultationMode === "BOTH") {
+      return res.status(400).json({ error: "consultationMode filter must be ONLINE or PHYSICAL" });
+    }
+    // A doctor matches if they offer exactly that mode, or offer BOTH.
+    where.consultationModes = { in: [consultationMode, "BOTH"] };
+  }
+
+  let doctors = await prisma.doctor.findMany({
+    where,
+    include: { specialization: true, clinic: true },
   });
+
+  // Availability filter: only kept if this doctor has at least one real,
+  // currently-bookable slot on the requested date. Computed with the same
+  // generateSlotsForDate used by GET /:id/slots — no duplicate logic.
+  if (date) {
+    if (!isValidDateStr(date)) {
+      return res.status(400).json({ error: "date query parameter must be in YYYY-MM-DD format" });
+    }
+    if (!isWithinBookingWindow(date)) {
+      return res.status(400).json({ error: "date is in the past or beyond the 30-day booking window" });
+    }
+
+    const filtered = [];
+    for (const doc of doctors) {
+      const availabilityRows = await prisma.doctorAvailability.findMany({
+        where: { doctorId: doc.id, active: true },
+      });
+      if (availabilityRows.length === 0) continue;
+
+      const existingAppointments = await prisma.appointment.findMany({
+        where: { doctorId: doc.id, status: { not: "CANCELLED" } },
+        select: { scheduledAt: true },
+      });
+      const bookedInstantsIso = new Set(existingAppointments.map((a) => a.scheduledAt.toISOString()));
+
+      const slots = generateSlotsForDate(availabilityRows, date, bookedInstantsIso, DEFAULT_SLOT_DURATION_MINUTES);
+      if (slots.length > 0) filtered.push(doc);
+    }
+    doctors = filtered;
+  }
+
   res.json(doctors);
 });
 
@@ -163,7 +318,7 @@ router.get("/", requireAuth, async (req, res) => {
 router.get("/:id", requireAuth, async (req, res) => {
   const doctor = await prisma.doctor.findUnique({
     where: { id: req.params.id },
-    include: { specialization: true },
+    include: { specialization: true, clinic: true },
   });
   if (!doctor || doctor.approvalStatus !== "APPROVED") {
     return res.status(404).json({ error: "Doctor not found" });

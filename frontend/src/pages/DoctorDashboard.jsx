@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext.jsx";
 import { apiFetch } from "../lib/api.js";
-import { formatCurrency } from "../lib/currency.js";
 import { formatTime12h, DAY_LABELS } from "../lib/dateFormat.js";
+
+const VALID_MODES = ["ONLINE", "PHYSICAL", "BOTH"];
 
 // A doctor only ever reaches this page with an active session, and the
 // backend only issues a session to an APPROVED doctor (see login's
@@ -18,12 +19,16 @@ export default function DoctorDashboard() {
   const [profile, setProfile] = useState(null);
   const [profileError, setProfileError] = useState(null);
 
-  useEffect(() => {
+  const loadProfile = useCallback(() => {
     if (!accessToken) return;
-    apiFetch("/api/doctors/me", {}, accessToken)
+    return apiFetch("/api/doctors/me", {}, accessToken)
       .then(setProfile)
       .catch((err) => setProfileError(err.message));
   }, [accessToken]);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
 
   return (
     <div className="min-h-screen bg-bg">
@@ -54,7 +59,8 @@ export default function DoctorDashboard() {
 
               <div className="h-px bg-line my-4" />
 
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+              <p className="text-xs text-muted uppercase tracking-wide mb-2">Protected credentials</p>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm mb-1">
                 <dt className="text-muted">Specialization</dt>
                 <dd className="text-ink">{profile.specialization?.name || "—"}</dd>
 
@@ -63,16 +69,15 @@ export default function DoctorDashboard() {
 
                 <dt className="text-muted">Registration / BM&amp;DC no.</dt>
                 <dd className="text-ink">{profile.registrationNumber || "—"}</dd>
-
-                <dt className="text-muted">Contact information</dt>
-                <dd className="text-ink">{profile.contactInfo || "—"}</dd>
-
-                <dt className="text-muted">Consultation fee</dt>
-                <dd className="text-ink">{formatCurrency(profile.consultationFee) || "Not set"}</dd>
               </dl>
+              <p className="text-xs text-muted">
+                These credentials were reviewed at onboarding and can't be self-edited here.
+              </p>
             </>
           )}
         </div>
+
+        {profile && <ProfileEditSection profile={profile} accessToken={accessToken} onUpdated={setProfile} />}
 
         {profile && <AvailabilitySection doctorId={profile.id} accessToken={accessToken} />}
 
@@ -82,6 +87,159 @@ export default function DoctorDashboard() {
           <p className="text-sm text-muted">Prescriptions will appear here in a later increment.</p>
         </div>
       </main>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Profile editing (Step 5). Only the fields PATCH /api/doctors/me actually
+// accepts are editable here — qualification/registrationNumber/specialization
+// are deliberately absent from this form; the backend rejects them anyway if
+// sent, but keeping them out of the UI avoids implying they're editable.
+// ---------------------------------------------------------------------------
+function ProfileEditSection({ profile, accessToken, onUpdated }) {
+  const [form, setForm] = useState(() => toFormState(profile));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [savedMessage, setSavedMessage] = useState(false);
+
+  function toFormState(p) {
+    return {
+      consultationFee: p.consultationFee ?? "",
+      contactInfo: p.contactInfo ?? "",
+      experience: p.experience ?? "",
+      bio: p.bio ?? "",
+      languages: p.languages ?? "",
+      consultationModes: p.consultationModes ?? "ONLINE",
+      clinicName: p.clinic?.name ?? "",
+      clinicArea: p.clinic?.area ?? "",
+      clinicAddress: p.clinic?.address ?? "",
+      clinicCity: p.clinic?.city ?? "",
+      clinicContactInfo: p.clinic?.contactInfo ?? "",
+    };
+  }
+
+  function update(field) {
+    return (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  }
+
+  const needsClinic = form.consultationModes === "PHYSICAL" || form.consultationModes === "BOTH";
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setError(null);
+    setSavedMessage(false);
+
+    if (needsClinic && !form.clinicName.trim()) {
+      setError("Clinic name is required to offer physical consultations.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const body = {
+        consultationFee: form.consultationFee === "" ? undefined : Number(form.consultationFee),
+        contactInfo: form.contactInfo,
+        experience: form.experience === "" ? undefined : Number(form.experience),
+        bio: form.bio,
+        languages: form.languages,
+        consultationModes: form.consultationModes,
+        clinic: needsClinic
+          ? {
+              name: form.clinicName,
+              area: form.clinicArea || undefined,
+              address: form.clinicAddress || undefined,
+              city: form.clinicCity || undefined,
+              contactInfo: form.clinicContactInfo || undefined,
+            }
+          : form.clinicName
+          ? undefined // keep an existing clinic on file even if currently ONLINE-only, unless the doctor clears it explicitly
+          : null,
+      };
+      const updated = await apiFetch("/api/doctors/me", { method: "PATCH", body }, accessToken);
+      onUpdated(updated);
+      setForm(toFormState(updated));
+      setSavedMessage(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="bg-white border border-line rounded-lg p-6">
+      <p className="font-display text-lg text-ink mb-1">Edit profile</p>
+      <p className="text-sm text-muted mb-4">
+        Bio, fee, contact info, languages, consultation modes, and clinic details — patients see these on your
+        profile.
+      </p>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <TextField label="Consultation fee (৳)" type="number" min="0" value={form.consultationFee} onChange={update("consultationFee")} />
+          <TextField label="Experience (years)" type="number" min="0" value={form.experience} onChange={update("experience")} />
+        </div>
+        <TextField label="Contact information" value={form.contactInfo} onChange={update("contactInfo")} />
+        <TextField label="Languages (comma-separated)" value={form.languages} onChange={update("languages")} placeholder="e.g. Bengali, English" />
+        <div>
+          <label className="block text-xs text-muted mb-1">Bio</label>
+          <textarea
+            value={form.bio}
+            onChange={update("bio")}
+            rows={3}
+            className="w-full border border-line rounded-md px-3 py-2 text-sm"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-muted mb-1">Consultation modes offered</label>
+          <select
+            value={form.consultationModes}
+            onChange={update("consultationModes")}
+            className="border border-line rounded-md px-2 py-1.5 text-sm bg-white"
+          >
+            {VALID_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m === "BOTH" ? "Online & Physical" : m === "ONLINE" ? "Online only" : "Physical only"}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {needsClinic && (
+          <div className="border border-line rounded-md p-4 space-y-3">
+            <p className="text-xs text-muted uppercase tracking-wide">Clinic (required for physical consultations)</p>
+            <TextField label="Clinic name" value={form.clinicName} onChange={update("clinicName")} required />
+            <div className="grid grid-cols-2 gap-3">
+              <TextField label="Area" value={form.clinicArea} onChange={update("clinicArea")} />
+              <TextField label="City" value={form.clinicCity} onChange={update("clinicCity")} />
+            </div>
+            <TextField label="Address" value={form.clinicAddress} onChange={update("clinicAddress")} />
+            <TextField label="Clinic contact info" value={form.clinicContactInfo} onChange={update("clinicContactInfo")} />
+          </div>
+        )}
+
+        {error && <p className="text-sm text-danger">{error}</p>}
+        {savedMessage && !error && <p className="text-sm text-teal">Profile updated.</p>}
+
+        <button
+          type="submit"
+          disabled={saving}
+          className="bg-teal text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-teal-dark disabled:opacity-50 transition-colors"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function TextField({ label, ...props }) {
+  return (
+    <div>
+      <label className="block text-xs text-muted mb-1">{label}</label>
+      <input {...props} className="w-full border border-line rounded-md px-3 py-2 text-sm" />
     </div>
   );
 }
@@ -338,6 +496,9 @@ function UpcomingAppointments({ accessToken }) {
                 {new Date(ap.scheduledAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
               </p>
               <p className="text-sm text-ink mt-0.5">Patient: {ap.patient?.name || "—"}</p>
+              <p className="text-xs text-muted mt-0.5">
+                {ap.consultationMode === "PHYSICAL" ? `In-clinic${ap.clinic ? ` · ${ap.clinic.name}` : ""}` : "Online"}
+              </p>
             </div>
             <span className="text-xs px-2 py-1 rounded-full bg-teal-light text-teal-dark">{ap.status}</span>
           </div>

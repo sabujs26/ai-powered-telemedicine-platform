@@ -31,10 +31,13 @@ const router = Router();
  * below and turned into a clear error.
  */
 router.post("/", requireAuth, requireRole("PATIENT"), async (req, res) => {
-  const { doctorId, scheduledAt } = req.body;
+  const { doctorId, scheduledAt, consultationMode } = req.body;
 
   if (!doctorId || !scheduledAt) {
     return res.status(400).json({ error: "doctorId and scheduledAt are required" });
+  }
+  if (!["ONLINE", "PHYSICAL"].includes(consultationMode)) {
+    return res.status(400).json({ error: "consultationMode must be ONLINE or PHYSICAL" });
   }
 
   const requestedInstant = new Date(scheduledAt);
@@ -45,9 +48,21 @@ router.post("/", requireAuth, requireRole("PATIENT"), async (req, res) => {
     return res.status(400).json({ error: "That time has already passed" });
   }
 
-  const doctor = await prisma.doctor.findUnique({ where: { id: doctorId } });
+  const doctor = await prisma.doctor.findUnique({ where: { id: doctorId }, include: { clinic: true } });
   if (!doctor || doctor.approvalStatus !== "APPROVED") {
     return res.status(404).json({ error: "Doctor not found or not currently accepting bookings" });
+  }
+
+  // Step 9: the chosen mode must actually be one this doctor offers — never
+  // trust that the frontend only showed valid options.
+  if (consultationMode === "ONLINE" && doctor.consultationModes === "PHYSICAL") {
+    return res.status(400).json({ error: "This doctor does not offer online consultations" });
+  }
+  if (consultationMode === "PHYSICAL" && doctor.consultationModes === "ONLINE") {
+    return res.status(400).json({ error: "This doctor does not offer physical consultations" });
+  }
+  if (consultationMode === "PHYSICAL" && !doctor.clinic) {
+    return res.status(400).json({ error: "This doctor has no clinic information on file for physical consultations" });
   }
 
   // Re-derive the Dhaka calendar date from the requested UTC instant, purely
@@ -93,6 +108,8 @@ router.post("/", requireAuth, requireRole("PATIENT"), async (req, res) => {
         scheduledAt: requestedInstant,
         durationMinutes: DEFAULT_SLOT_DURATION_MINUTES,
         status: "PENDING_PAYMENT",
+        consultationMode,
+        clinicId: consultationMode === "PHYSICAL" ? doctor.clinic.id : null,
       },
     });
     res.status(201).json(appointment);
@@ -122,6 +139,7 @@ router.get("/", requireAuth, async (req, res) => {
       doctor: { include: { specialization: true } },
       patient: true,
       payment: true,
+      clinic: true,
     },
     orderBy: { scheduledAt: "asc" },
   });

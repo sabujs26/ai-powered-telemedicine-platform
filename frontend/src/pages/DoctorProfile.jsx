@@ -18,10 +18,11 @@ export default function DoctorProfile() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { accessToken } = useAuth();
-  const { setSelectedDoctor, setSelectedSlot } = useBooking();
+  const { setSelectedDoctor, setSelectedSlot, setSelectedMode } = useBooking();
 
   const [doctor, setDoctor] = useState(null);
   const [weeklyAvailability, setWeeklyAvailability] = useState([]);
+  const [mode, setMode] = useState(null); // "ONLINE" | "PHYSICAL" — the mode the PATIENT is currently viewing/choosing
   const [selectedDate, setSelectedDate] = useState(null);
   const [slots, setSlots] = useState(null); // null = not yet fetched for the current date
   const [loading, setLoading] = useState(true);
@@ -38,6 +39,9 @@ export default function DoctorProfile() {
       .then(([doc, availability]) => {
         setDoctor(doc);
         setWeeklyAvailability(availability);
+        // Default to whichever mode this doctor actually offers — never
+        // default to a mode they don't support (Step 8).
+        setMode(doc.consultationModes === "PHYSICAL" ? "PHYSICAL" : "ONLINE");
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -69,6 +73,7 @@ export default function DoctorProfile() {
   function handleSelectSlot(slot) {
     setSelectedDoctor(doctor);
     setSelectedSlot(slot); // { time: "HH:mm", datetime: ISO string } — exactly as returned by the backend
+    setSelectedMode(mode);
     navigate("/patient/book");
   }
 
@@ -91,6 +96,9 @@ export default function DoctorProfile() {
     );
   }
 
+  const offersOnline = doctor.consultationModes === "ONLINE" || doctor.consultationModes === "BOTH";
+  const offersPhysical = doctor.consultationModes === "PHYSICAL" || doctor.consultationModes === "BOTH";
+
   return (
     <AppShell>
       <Link to="/patient/doctors" className="text-sm text-muted hover:text-teal">
@@ -101,10 +109,44 @@ export default function DoctorProfile() {
         <p className="font-display text-2xl text-ink">{doctor.name}</p>
         <p className="text-teal text-sm mt-1">{doctor.specialization?.name}</p>
         {doctor.qualification && <p className="text-sm text-muted mt-3 max-w-lg">{doctor.qualification}</p>}
+        <div className="flex gap-4 mt-2 text-sm text-muted">
+          {(doctor.experience ?? null) !== null && <span>{doctor.experience} years experience</span>}
+        </div>
+        {doctor.bio && <p className="text-sm text-ink mt-3 max-w-lg">{doctor.bio}</p>}
+        {doctor.languages && <p className="text-sm text-muted mt-2">Speaks: {doctor.languages}</p>}
         <p className="text-sm text-ink mt-4 font-medium">
           {formatCurrency(doctor.consultationFee) || "Consultation fee not set"} per consultation
         </p>
       </div>
+
+      {/* Step 8: clearly distinguish ONLINE vs PHYSICAL — never show a mode
+          this doctor doesn't actually offer. */}
+      {offersOnline && offersPhysical ? (
+        <div className="flex gap-2 mb-6">
+          <ModeToggle label="Online consultation" active={mode === "ONLINE"} onClick={() => setMode("ONLINE")} />
+          <ModeToggle
+            label="Physical consultation"
+            active={mode === "PHYSICAL"}
+            onClick={() => setMode("PHYSICAL")}
+          />
+        </div>
+      ) : (
+        <div className="mb-6">
+          <span className="inline-block text-xs px-2.5 py-1 rounded-full bg-teal-light text-teal-dark">
+            {offersOnline ? "Online consultation only" : "Physical consultation only"}
+          </span>
+        </div>
+      )}
+
+      {mode === "PHYSICAL" && doctor.clinic && (
+        <div className="border border-line bg-white rounded-lg p-5 mb-6">
+          <p className="text-sm font-medium text-ink mb-1">{doctor.clinic.name}</p>
+          <p className="text-sm text-muted">
+            {[doctor.clinic.address, doctor.clinic.area, doctor.clinic.city].filter(Boolean).join(", ")}
+          </p>
+          {doctor.clinic.contactInfo && <p className="text-sm text-muted mt-1">{doctor.clinic.contactInfo}</p>}
+        </div>
+      )}
 
       {weeklyAvailability.length === 0 ? (
         <div className="border border-line bg-white rounded-lg p-5 text-sm text-muted">
@@ -175,5 +217,18 @@ export default function DoctorProfile() {
         </div>
       )}
     </AppShell>
+  );
+}
+
+function ModeToggle({ label, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 rounded-md text-sm border transition-colors ${
+        active ? "bg-teal text-white border-teal" : "border-line text-muted hover:border-teal hover:text-teal"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

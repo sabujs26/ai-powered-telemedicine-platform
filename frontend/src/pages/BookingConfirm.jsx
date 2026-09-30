@@ -17,13 +17,13 @@ import { formatTime12h } from "../lib/dateFormat.js";
  * to connect here.
  */
 export default function BookingConfirm() {
-  const { selectedDoctor, selectedSlot } = useBooking();
+  const { selectedDoctor, selectedSlot, selectedMode } = useBooking();
   const { accessToken } = useAuth();
   const [status, setStatus] = useState("review"); // review -> booking -> done
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
-  if (!selectedDoctor || !selectedSlot) {
+  if (!selectedDoctor || !selectedSlot || !selectedMode) {
     return <Navigate to="/patient/doctors" replace />;
   }
 
@@ -33,7 +33,10 @@ export default function BookingConfirm() {
     try {
       await apiFetch(
         "/api/appointments",
-        { method: "POST", body: { doctorId: selectedDoctor.id, scheduledAt: selectedSlot.datetime } },
+        {
+          method: "POST",
+          body: { doctorId: selectedDoctor.id, scheduledAt: selectedSlot.datetime, consultationMode: selectedMode },
+        },
         accessToken
       );
       setStatus("done");
@@ -86,6 +89,10 @@ export default function BookingConfirm() {
         <div className="space-y-3 text-sm">
           <Row label="Doctor" value={selectedDoctor.name} />
           <Row label="Specialty" value={selectedDoctor.specialization?.name} />
+          <Row label="Consultation" value={selectedMode === "PHYSICAL" ? "Physical (in-clinic)" : "Online"} />
+          {selectedMode === "PHYSICAL" && selectedDoctor.clinic && (
+            <Row label="Clinic" value={selectedDoctor.clinic.name} />
+          )}
           <Row
             label="Date"
             value={slotDate.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
