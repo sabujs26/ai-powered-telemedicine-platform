@@ -114,6 +114,7 @@ export default function DoctorProfile() {
         </div>
         {doctor.bio && <p className="text-sm text-ink mt-3 max-w-lg">{doctor.bio}</p>}
         {doctor.languages && <p className="text-sm text-muted mt-2">Speaks: {doctor.languages}</p>}
+        {doctor.contactInfo && <p className="text-sm text-muted mt-2">Contact: {doctor.contactInfo}</p>}
         <p className="text-sm text-ink mt-4 font-medium">
           {formatCurrency(doctor.consultationFee) || "Consultation fee not set"} per consultation
         </p>
