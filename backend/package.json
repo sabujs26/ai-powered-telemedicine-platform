@@ -9,7 +9,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "test": "jest"
+    "test": "node --test",
+    "seed:specializations": "node prisma/seed-specializations.js"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",

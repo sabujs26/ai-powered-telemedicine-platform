@@ -38,6 +38,7 @@ export default function DoctorSearch() {
   const [specializations, setSpecializations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
 
   // Resolve the AI's suggested specialty NAME into a specializationId once
   // the real specialization list has loaded (the AI only knows names).
@@ -47,8 +48,16 @@ export default function DoctorSearch() {
       .then((list) => {
         setSpecializations(list);
         if (filters.specialtyName) {
-          const match = list.find((s) => s.name === filters.specialtyName);
-          if (match) setFilters((f) => ({ ...f, specializationId: match.id }));
+          const match = list.find((s) => s.name.toLowerCase() === filters.specialtyName.toLowerCase());
+          if (match) {
+            setFilters((f) => ({ ...f, specializationId: match.id, specialtyName: match.name }));
+          } else {
+            // Don't claim "Showing X matches" for a filter that was never applied.
+            setNotice(
+              `Your symptom check suggested "${filters.specialtyName}", but no doctors are listed under that specialty yet. Showing all approved doctors.`
+            );
+            setFilters((f) => ({ ...f, specialtyName: "" }));
+          }
         }
       })
       .catch((err) => setError(err.message));
@@ -109,6 +118,7 @@ export default function DoctorSearch() {
         )}
       </p>
 
+      {notice && <p className="text-sm text-amber border border-amber/30 bg-amber-light rounded-md px-3 py-2 mb-4">{notice}</p>}
       {error && <p className="text-sm text-danger mb-4">{error}</p>}
 
       <div className="flex flex-wrap gap-2 mb-4">

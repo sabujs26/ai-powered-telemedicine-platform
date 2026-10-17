@@ -62,7 +62,13 @@ export async function apiFetch(path, { method = "GET", body } = {}, tokenOverrid
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Request failed: ${res.status}`);
+    // Prefer a human-readable `message` when the API sends one; otherwise fall back to the
+    // existing `error` string. status/body are attached so callers can react to details
+    // (e.g. the symptom check must still show an urgent warning when the AI service is down).
+    const e = new Error(err.message || err.error || `Request failed: ${res.status}`);
+    e.status = res.status;
+    e.body = err;
+    throw e;
   }
   return res.json();
 }
