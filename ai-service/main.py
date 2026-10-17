@@ -1,100 +1,111 @@
 """
-AI Symptom Assessment microservice — stub implementation.
+AI symptom-pattern service (FastAPI).
 
-This matches the POST /predict contract from Section 12 of the requirements
-baseline (AI-05, AI-06, AI-09). Right now it returns a fixed placeholder
-prediction plus an emergency-symptom check (decision #3, Section 18) so the
-rest of the system (frontend, backend, DB) can be built and tested end to end
-before the real trained model is ready.
+Replaces the earlier hard-coded stub. There is NO mock/fallback predictor:
+if the model files are missing or inconsistent the service starts in a
+"degraded" state, /health explains why, and /predict + /symptoms answer 503.
 
-WHEN YOU HAVE YOUR TRAINED MODEL:
-  1. Load it once at startup (see the `# TODO: load model` marker below).
-  2. Replace the body of `run_stub_prediction()` with a real
-     `model.predict(...)` call that returns the same shape:
-        { "condition": str, "confidence": float }
-  3. Everything else in this file — the emergency check, the response
-     schema, the specialist lookup — can stay exactly as is.
-  No changes are needed in the Node backend or the React frontend.
+Privacy: symptom values are never logged and never echoed back in errors.
+Run it bound to localhost only (see README/start instructions) - it has no
+authentication of its own because only the Express backend should call it.
 """
 
-from fastapi import FastAPI
+import logging
+import os
+import time
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
 
-app = FastAPI(title="Telemed AI Service")
+from model_runtime import (
+    MAX_SYMPTOMS,
+    MIN_SYMPTOMS,
+    MODEL_NAME,
+    MODEL_REVISION,
+    InvalidInput,
+    ModelLoadError,
+    ModelRuntime,
+)
 
-# --- Decision #3 (Section 18): fixed red-flag symptom list -----------------
-# If any of these appear in the submitted symptoms, we short-circuit the
-# normal prediction and flag it as an emergency instead (AI-09).
-EMERGENCY_SYMPTOMS = {
-    "chest pain",
-    "difficulty breathing",
-    "severe bleeding",
-    "loss of consciousness",
-    "stroke symptoms",
-    "severe allergic reaction",
-}
-
-# --- Placeholder specialist mapping (decision #1, Section 18) --------------
-# Replace this once your trained model's real output classes are known —
-# the model's class list IS the taxonomy (no separate dataset needed).
-CONDITION_TO_SPECIALIST = {
-    "common cold": "General Physician",
-    "migraine": "Neurologist",
-    "gastritis": "Gastroenterologist",
-    "skin rash": "Dermatologist",
-}
+BASE_DIR = Path(__file__).resolve().parent
+log = logging.getLogger("ai.service")
 
 
 class PredictRequest(BaseModel):
-    symptoms: List[str]
+    symptoms: list[str]
 
 
-class Prediction(BaseModel):
-    condition: str
-    confidence: float
+def _error(status: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": code, "message": message})
 
 
-class PredictResponse(BaseModel):
-    predictions: List[Prediction]
-    emergencyFlag: bool
-    recommendedSpecialist: Optional[str] = None
+def create_app(model_dir: Path | None = None, disease_map_path: Path | None = None) -> FastAPI:
+    model_dir = Path(model_dir or os.environ.get("MODEL_DIR") or BASE_DIR / "model")
+    disease_map_path = Path(disease_map_path or BASE_DIR / "data" / "disease_map.json")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.runtime = None
+        app.state.reason = None
+        try:
+            app.state.runtime = ModelRuntime.load(model_dir, disease_map_path)
+        except ModelLoadError as exc:
+            app.state.reason = str(exc)
+            log.error("model unavailable: %s", exc)
+        yield
+
+    app = FastAPI(title="Telemed AI symptom-pattern service (experimental)", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_handler(request: Request, exc: RequestValidationError):
+        # FastAPI's default 422 body echoes the offending input - which here is
+        # patient health data. Return a generic message instead.
+        return _error(422, "INVALID_INPUT", "Request body is invalid.")
+
+    @app.get("/health")
+    def health():
+        rt: ModelRuntime | None = app.state.runtime
+        return {
+            "status": "ok" if rt else "degraded",
+            "modelLoaded": rt is not None,
+            "reason": None if rt else app.state.reason,
+            "model": {"name": MODEL_NAME, "revision": MODEL_REVISION[:7], "experimental": True},
+            "layers": rt.summary if rt else None,
+            "artifactSha256": rt.hashes if rt else None,
+        }
+
+    @app.get("/symptoms")
+    def symptoms():
+        rt: ModelRuntime | None = app.state.runtime
+        if rt is None:
+            return _error(503, "MODEL_UNAVAILABLE", "The symptom model is not available.")
+        return {"symptoms": rt.catalogue(), "minSymptoms": MIN_SYMPTOMS, "maxSymptoms": MAX_SYMPTOMS}
+
+    @app.post("/predict")
+    def predict(body: PredictRequest):
+        rt: ModelRuntime | None = app.state.runtime
+        if rt is None:
+            return _error(503, "MODEL_UNAVAILABLE", "The symptom model is not available.")
+        started = time.perf_counter()
+        try:
+            result = rt.assess(body.symptoms)
+        except InvalidInput as exc:
+            return _error(422, "INVALID_INPUT", str(exc))
+        # Counts/timing only - never the symptom values.
+        log.info(
+            "predict ok n=%d strength=%s ms=%d",
+            len(set(body.symptoms)),
+            result["matchStrength"],
+            (time.perf_counter() - started) * 1000,
+        )
+        return result
+
+    return app
 
 
-# TODO: load model
-# model = joblib.load("model.pkl")  # or however your trained model is saved
-
-
-def check_emergency(symptoms: List[str]) -> bool:
-    normalized = {s.strip().lower() for s in symptoms}
-    return bool(normalized & EMERGENCY_SYMPTOMS)
-
-
-def run_stub_prediction(symptoms: List[str]) -> List[Prediction]:
-    """Placeholder logic — replace with a real model.predict() call."""
-    return [Prediction(condition="common cold", confidence=0.62)]
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "telemed-ai-service"}
-
-
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
-    emergency = check_emergency(req.symptoms)
-
-    if emergency:
-        # Per decision #3: still return a response, but flagged — the
-        # backend/frontend show an urgent-care warning; booking is not blocked.
-        return PredictResponse(predictions=[], emergencyFlag=True, recommendedSpecialist=None)
-
-    predictions = run_stub_prediction(req.symptoms)
-    top_condition = predictions[0].condition if predictions else None
-    specialist = CONDITION_TO_SPECIALIST.get(top_condition)
-
-    return PredictResponse(
-        predictions=predictions,
-        emergencyFlag=False,
-        recommendedSpecialist=specialist,
-    )
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+app = create_app()

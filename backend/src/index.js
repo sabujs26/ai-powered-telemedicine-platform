@@ -12,6 +12,8 @@ import doctorRoutes from "./routes/doctors.js";
 import appointmentRoutes from "./routes/appointments.js";
 import paymentRoutes from "./routes/payments.js";
 import aiRoutes from "./routes/ai.js";
+import adminRoutes from "./routes/admin.js";
+import specializationRoutes from "./routes/specializations.js";
 
 const app = express();
 
@@ -41,6 +43,8 @@ app.use("/api/doctors", doctorRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/payments", paymentRoutes); // includes /checkout (json) and /webhook (raw, mounted above)
 app.use("/api/ai", sensitiveLimiter, aiRoutes);
+app.use("/api/admin", adminRoutes); // requireAuth + requireRole("ADMIN") enforced inside the router
+app.use("/api/specializations", specializationRoutes); // public, read-only
 
 // Generic error handler — avoids leaking internals (SEC-09 spirit: don't log/echo sensitive data).
 app.use((err, req, res, next) => {

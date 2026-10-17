@@ -9,6 +9,60 @@
 // AUTH UPDATE: Firebase Authentication has been replaced with local
 // email+password auth (bcrypt hashing + JWT access/refresh tokens).
 // User.firebaseUid was removed; User.password and RefreshToken were added.
+//
+// DOCTOR ONBOARDING UPDATE: superseding the earlier "Admin creates Doctor
+// directly" decision — Doctors now self-register (role=DOCTOR,
+// approvalStatus=PENDING) via POST /api/auth/register-doctor, and an Admin
+// approves/rejects via /api/admin/doctors/*. Doctor gained qualification,
+// registrationNumber, contactInfo (basic MVP application info — no external
+// credential verification). The old Admin-direct-create endpoint
+// (POST /api/doctors) still exists unchanged as an alternate path.
+//
+// AVAILABILITY + SCHEDULING UPDATE: DoctorAvailability was redesigned from a
+// one-off "single bookable slot with isBooked flag" model into a RECURRING
+// WEEKLY TEMPLATE (dayOfWeek + startTime/endTime as time-of-day + active
+// flag). Individual bookable slots are no longer rows in the database — they
+// are generated dynamically per real calendar date from this weekly template
+// (see backend/src/lib/scheduling.js). Appointment.slotId/slot was removed
+// accordingly and replaced with Appointment.scheduledAt (the actual real
+// UTC instant) + Appointment.durationMinutes (a snapshot of the slot length
+// at booking time). A composite unique index on (doctorId, scheduledAt)
+// enforces double-booking prevention at the database level.
+//
+// TIME REPRESENTATION: DoctorAvailability.startTime/endTime are stored as
+// "HH:mm" 24-hour strings (e.g. "09:00", "13:00"), not DateTime — they
+// represent a repeating time-of-day, not a specific instant, so a DateTime
+// column would be misleading (it would imply a specific date). String
+// zero-padded 24h format also sorts/compares correctly lexicographically,
+// which simplifies overlap validation. dayOfWeek is an Int 0–6 following
+// JavaScript's `Date.getUTCDay()` convention (0=Sunday .. 6=Saturday), which
+// is exactly what the backend's date-to-day-of-week calculation produces —
+// keeping both sides of that comparison in the same convention avoids a
+// common source of off-by-one bugs.
+//
+// TIMEZONE: this application is for Bangladesh (Asia/Dhaka, UTC+6, no DST
+// — a fixed offset year-round). Appointment.scheduledAt is stored as a
+// genuine UTC instant (Prisma/Postgres native DateTime), which is the
+// correct way to store "a real moment in time." All Dhaka-wall-clock
+// interpretation (which weekday a given calendar date falls on, converting
+// a doctor's "09:00" availability into the correct UTC instant for a
+// specific date, and determining "today" in Dhaka) happens explicitly in
+// backend/src/lib/scheduling.js using a fixed +6:00 offset — deliberately
+// not pulling in a timezone library (e.g. date-fns-tz/luxon) for this,
+// since Bangladesh's fixed, DST-free offset makes that unnecessary
+// complexity for this MVP.
+//
+// DOCTOR DISCOVERY + PROFILE ENHANCEMENT UPDATE: added a one-per-doctor
+// Clinic model (Doctor.clinic, enforced by @unique on Clinic.doctorId — a
+// doctor cannot have a second clinic), Doctor gained experience/bio/
+// languages/consultationModes (editable profile fields), and Appointment
+// gained consultationMode + an optional clinicId (set only for PHYSICAL
+// appointments). Credential fields (qualification, registrationNumber,
+// specializationId) remain admin/onboarding-controlled — see
+// PATCH /api/doctors/me in doctors.js for the enforcement point. The
+// consultation fee remains a single field shared by both online and
+// physical consultation, per the simplified business rule — no separate
+// pricing was introduced.
 
 generator client {
   provider = "prisma-client-js"
@@ -53,6 +107,16 @@ enum ConsultationStatus {
   COMPLETED
 }
 
+// Doctor Discovery + Profile Enhancement update: what a doctor OFFERS
+// (Doctor.consultationModes, may be BOTH) vs. what a specific appointment
+// USES (Appointment.consultationMode — application code validates this is
+// only ONLINE or PHYSICAL, never BOTH; Prisma enums can't express a subset).
+enum ConsultationMode {
+  ONLINE
+  PHYSICAL
+  BOTH
+}
+
 model User {
   id        String   @id @default(uuid())
   email     String   @unique
@@ -92,18 +156,43 @@ model Patient {
 }
 
 model Doctor {
-  id               String         @id @default(uuid())
-  userId           String         @unique
-  user             User           @relation(fields: [userId], references: [id])
-  name             String
-  specializationId String
-  specialization   Specialization @relation(fields: [specializationId], references: [id])
-  approvalStatus   ApprovalStatus @default(PENDING) // Admin-only creation (decision #2): starts PENDING, Admin sets APPROVED
-  consultationFee  Decimal?       @db.Decimal(10, 2) // decision #9: doctor sets own fee
+  id                 String           @id @default(uuid())
+  userId             String           @unique
+  user               User             @relation(fields: [userId], references: [id])
+  name               String
+  specializationId   String // PROTECTED credential — see PATCH /api/doctors/me: doctor cannot self-edit this
+  specialization     Specialization   @relation(fields: [specializationId], references: [id])
+  approvalStatus     ApprovalStatus   @default(PENDING) // set PENDING on self-registration; Admin moves to APPROVED/REJECTED
+  consultationFee    Decimal?         @db.Decimal(10, 2) // decision #9: doctor sets own fee — SAME fee for online and physical (no separate pricing)
+  qualification      String? // PROTECTED credential — e.g. "MBBS, FCPS (Medicine)" — MVP: free text, no external verification
+  registrationNumber String? // PROTECTED credential — BM&DC registration number (or equivalent) — MVP: free text, not verified against any registry
+  contactInfo        String?
+  experience         Int? // years of experience — editable by the doctor
+  bio                String? // editable "about" text — editable by the doctor
+  languages          String? // simple comma-separated free text (e.g. "Bengali, English") — kept as a plain field rather than a new relational table, per "do not over-engineer"
+  consultationModes  ConsultationMode @default(ONLINE) // what this doctor offers: ONLINE, PHYSICAL, or BOTH — editable by the doctor
 
+  clinic        Clinic? // Step 3: one doctor -> zero or one clinic (a doctor with ONLINE-only need not have one)
   availability  DoctorAvailability[]
   appointments  Appointment[]
   prescriptions Prescription[]
+}
+
+// Step 3: exactly one clinic per doctor, enforced by the @unique on doctorId
+// (a second Clinic row for the same doctor would violate that constraint).
+// Deliberately NOT a multi-clinic design, per the simplified business rule.
+model Clinic {
+  id          String       @id @default(uuid())
+  doctorId    String       @unique
+  doctor      Doctor       @relation(fields: [doctorId], references: [id])
+  name        String
+  area        String?
+  address     String?
+  city        String?
+  contactInfo String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  appointments Appointment[]
 }
 
 model Specialization {
@@ -119,26 +208,34 @@ model DoctorAvailability {
   id        String   @id @default(uuid())
   doctorId  String
   doctor    Doctor   @relation(fields: [doctorId], references: [id])
-  startTime DateTime
-  endTime   DateTime
-  isBooked  Boolean  @default(false)
+  dayOfWeek Int // 0=Sunday .. 6=Saturday (JS Date.getUTCDay() convention — see header comment)
+  startTime String // "HH:mm" 24-hour, e.g. "09:00" — time-of-day, not a specific date
+  endTime   String // "HH:mm" 24-hour, e.g. "13:00"
+  active    Boolean  @default(true) // enable/disable without deleting (Step 2: "Enable/disable an availability period")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  appointment Appointment?
+  @@unique([doctorId, dayOfWeek, startTime, endTime])
 }
 
 model Appointment {
-  id        String             @id @default(uuid())
-  patientId String
-  patient   Patient            @relation(fields: [patientId], references: [id])
-  doctorId  String
-  doctor    Doctor             @relation(fields: [doctorId], references: [id])
-  slotId    String             @unique
-  slot      DoctorAvailability @relation(fields: [slotId], references: [id])
-  status    AppointmentStatus  @default(PENDING_PAYMENT)
-  createdAt DateTime           @default(now())
+  id               String            @id @default(uuid())
+  patientId        String
+  patient          Patient           @relation(fields: [patientId], references: [id])
+  doctorId         String
+  doctor           Doctor            @relation(fields: [doctorId], references: [id])
+  scheduledAt      DateTime // the real UTC instant of the appointment (see header comment on timezone strategy)
+  durationMinutes  Int               @default(30) // snapshot of slot length at booking time
+  status           AppointmentStatus @default(PENDING_PAYMENT)
+  consultationMode ConsultationMode  @default(ONLINE) // application code validates this is ONLINE or PHYSICAL only, never BOTH
+  clinicId         String? // set only for PHYSICAL appointments; null for ONLINE (Step 4)
+  clinic           Clinic?           @relation(fields: [clinicId], references: [id])
+  createdAt        DateTime          @default(now())
 
   payment      Payment?
   consultation Consultation?
+
+  @@unique([doctorId, scheduledAt]) // DB-level double-booking prevention (Step 9)
 }
 
 model Payment {

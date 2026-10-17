@@ -27,12 +27,18 @@ async function refreshAccessToken() {
 }
 
 /**
- * Thin fetch wrapper that attaches the current JWT access token. On a 401
- * (expired access token), it silently attempts one refresh using the
- * httpOnly refresh cookie and retries the request once before giving up —
- * this is what "handle expired access tokens" (Section 11) means in practice.
+ * Thin fetch wrapper that attaches a JWT access token. On a 401 (expired
+ * access token), it silently attempts one refresh using the httpOnly
+ * refresh cookie and retries the request once before giving up — this is
+ * what "handle expired access tokens" (Section 11) means in practice.
+ *
+ * `tokenOverride` lets a caller pass the access token it already has
+ * synchronously (e.g. from `useAuth().accessToken`) instead of relying on
+ * the module-level `currentAccessToken`, which is kept in sync via a
+ * separate effect in AuthContext and can lag by one render immediately
+ * after login/navigation. Passing the token explicitly avoids that race.
  */
-export async function apiFetch(path, { method = "GET", body } = {}) {
+export async function apiFetch(path, { method = "GET", body } = {}, tokenOverride) {
   async function doFetch(token) {
     return fetch(`${API_BASE}${path}`, {
       method,
@@ -45,7 +51,7 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
     });
   }
 
-  let res = await doFetch(currentAccessToken);
+  let res = await doFetch(tokenOverride ?? currentAccessToken);
 
   if (res.status === 401) {
     const newToken = await refreshAccessToken();
@@ -56,7 +62,13 @@ export async function apiFetch(path, { method = "GET", body } = {}) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Request failed: ${res.status}`);
+    // Prefer a human-readable `message` when the API sends one; otherwise fall back to the
+    // existing `error` string. status/body are attached so callers can react to details
+    // (e.g. the symptom check must still show an urgent warning when the AI service is down).
+    const e = new Error(err.message || err.error || `Request failed: ${res.status}`);
+    e.status = res.status;
+    e.body = err;
+    throw e;
   }
   return res.json();
 }
