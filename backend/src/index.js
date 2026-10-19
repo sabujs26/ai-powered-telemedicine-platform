@@ -14,6 +14,8 @@ import paymentRoutes from "./routes/payments.js";
 import aiRoutes from "./routes/ai.js";
 import adminRoutes from "./routes/admin.js";
 import specializationRoutes from "./routes/specializations.js";
+import notificationRoutes from "./routes/notifications.js";
+import { startAppointmentReminderScheduler } from "./services/appointmentReminderScheduler.js";
 
 const app = express();
 
@@ -41,6 +43,7 @@ app.use("/api/health", healthRoutes);
 app.use("/api/auth", sensitiveLimiter, authRoutes);
 app.use("/api/doctors", doctorRoutes);
 app.use("/api/appointments", appointmentRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/payments", paymentRoutes); // includes /checkout (json) and /webhook (raw, mounted above)
 app.use("/api/ai", sensitiveLimiter, aiRoutes);
 app.use("/api/admin", adminRoutes); // requireAuth + requireRole("ADMIN") enforced inside the router
@@ -52,7 +55,11 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Internal server error" });
 });
 
+
 const PORT = process.env.PORT || 4000;
+
 app.listen(PORT, () => {
   console.log(`telemed-backend listening on http://localhost:${PORT}`);
+
+  startAppointmentReminderScheduler();
 });

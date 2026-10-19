@@ -124,9 +124,10 @@ model User {
   role      Role
   createdAt DateTime @default(now())
 
-  refreshTokens RefreshToken[]
+   refreshTokens RefreshToken[]
   patient       Patient?
   doctor        Doctor?
+  notifications Notification[]
 }
 
 // Supports refresh-token rotation/revocation (Section 8 of the auth spec):
@@ -234,6 +235,7 @@ model Appointment {
 
   payment      Payment?
   consultation Consultation?
+  notifications Notification[]
 
   @@unique([doctorId, scheduledAt]) // DB-level double-booking prevention (Step 9)
 }
@@ -290,4 +292,23 @@ model SymptomAssessment {
   recommendedSpecialist   Specialization? @relation(fields: [recommendedSpecialistId], references: [id])
   emergencyFlag           Boolean         @default(false) // decision #3: red-flag symptom check
   createdAt               DateTime        @default(now())
+}
+
+
+model Notification {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  type          String
+  title         String
+  message       String
+  read          Boolean  @default(false)
+  reminderKey   String?  @unique
+  createdAt     DateTime @default(now())
+  readAt        DateTime?
+
+  @@index([userId, read, createdAt])
+  @@index([appointmentId])
 }
